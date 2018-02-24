@@ -77,7 +77,7 @@ class lstm_att(nn.Module):
 
 LEARNING_RATE = 0.01
 NEPOCHS = 1
-BATCH_SIZE = 64
+BATCH_SIZE = 16
 
 # input = Variable(torch.randn(1000,70000,1))#1000 batch size, 100 seq len
 inputs = torch.from_numpy(data).type(FloatTensor)
@@ -96,8 +96,8 @@ inputs = Variable(norm(inputs.permute(2,0,1)).permute(1,2,0))
 
 if cuda:
     model = model.cuda()
-    inputs = inputs.cuda()
-    targets = targets.cuda()
+    # inputs = inputs.cuda()
+    # targets = targets.cuda()
     print 'GPU enabled'
 
 for epoch in range(NEPOCHS):
@@ -106,13 +106,14 @@ for epoch in range(NEPOCHS):
     for bid, bind in enumerate(batch(data_shape[0], BATCH_SIZE)):
         binputs, btargets = inputs[bind,:,:], targets[bind,:]
         # binputs, btargets = inputs[bind,:,:], targets[bind]
-        # if cuda:
-        #     binputs.cuda()
-        #     btargets.cuda()
+        if cuda:
+            binputs.cuda()
+            btargets.cuda()
         pred = model(binputs, istraining = True)
         model.zero_grad()
         loss = loss_function(pred, torch.squeeze(btargets))
         losses.append(loss.data.tolist()[0])
         loss.backward()
         optimizer.step()
-        print 'batch-{0} loss-{1}'.format(b, loss[-1])
+        if bid%1000 == 0:
+            print 'batch-{0} loss-{1}'.format(bid, sum(losses)/len(losses))
