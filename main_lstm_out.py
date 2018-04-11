@@ -5,14 +5,13 @@ from torchvision.transforms import Normalize
 from torch.nn.modules.module import _addindent
 from torch.autograd import Variable
 import torch.optim as optim
-from utils import batch
-import random
+from utils import batch, get_split_ind
 from sklearn import metrics
 from tensorboardX import SummaryWriter
 
 writer = SummaryWriter()
 cuda = torch.cuda.is_available()
-gpus = [0]
+gpus = [2]
 bi_dir = 1 # if bidirectional
 split_frac = [0.7, 0.1, 0.2] # train-val-test split
 if cuda:
@@ -82,7 +81,7 @@ class lstm_att(nn.Module):
         self.dense_class = nn.Linear(dense_out, class_num)
         #####
         self.soft = nn.Softmax(dim=1)
-        self.dropout = nn.Dropout(drop_rate)
+        self.dropout = nn.Dropout(drop_rate+0.7)
         self.tanh = nn.Tanh()
         self.sigmoid = nn.Sigmoid()
         self.relu = nn.ReLU()
@@ -91,6 +90,31 @@ class lstm_att(nn.Module):
         # self.Wa = Variable(torch.randn(1,align_hidd, hidden_size)).repeat(1000,1,1) # n`*n;here n->2n?
         # self.Ua = Variable(torch.randn(1,align_hidd, 2*hidden_size)).repeat(1000,1,1) # n`*2n
         # self.Va = Variable(torch.randn(1,align_hidd,1)).repeat(1000,1,1) # n`
+
+    def weight_init(self, flag, type=None):
+
+        if flag:
+            # if type == 'kaiming_normal':
+            #     init_type = nn.init.kaiming_normal()
+            # elif type == 'normal':
+            #     init_type = nn.init.normal()
+            # else:
+            #     init_type = nn.init.xavier_normal()
+
+            for name, param in model.named_parameters():
+                if 'lstm' and 'weight' in name or 'dense' and 'weight' in name:
+                    if type == 'kaiming_normal':
+                        nn.init.kaiming_normal(param)
+                    elif type == 'normal':
+                        nn.init.normal(param)
+                    else:
+                        nn.init.xavier_normal(param)
+                    print name+' initialized with '+ type
+                elif 'dense' and 'bias' in name:
+                    nn.init.constant(param, 0)
+                    print name + ' initialized with const. zero.'
+                # print name
+        return
 
     def forward(self, input, istraining=False):
         # print input.size()
@@ -124,7 +148,7 @@ class lstm_att(nn.Module):
         U = self.relu(self.dense(hid))
         if istraining:
             U = self.dropout(U)
-        U = self.relu(self.dense2(U))
+        U = self.dropout(self.relu(self.dense2(U))) # dropout added after gradient results
         alpha = self.soft(self.relu(U).view(U.size()[0], U.size()[1]))
         return alpha
 
@@ -176,18 +200,17 @@ targets = Variable(torch.from_numpy(targets_onehot).type(LongTensor))
 mean = [torch.mean(inputs)]# [-0.5329]
 std = [torch.std(inputs)]# [1302.4]# torch.std(inputs)
 norm = Normalize(mean, std)
-inputs = Variable(norm(inputs.permute(2,0,1)).permute(1,2,0), requires_grad = True)
-print inputs.requires_grad
-data_shape = inputs.size()
-rand_order = range(0, data_shape[0])
-random.Random(1729).shuffle(rand_order)
-# print len(rand_order[0:np.floor(data_shape[0]*split_frac[0]).astype('int32')])
-train_data = inputs[rand_order[0:np.floor(data_shape[0]*split_frac[0]).astype('int32')], :, :]
-val_data = inputs[rand_order[np.ceil(data_shape[0]*split_frac[0]).astype('int32'):np.floor(data_shape[0]*sum(split_frac[0:2])).astype('int32')], :, :]
-test_data = inputs[rand_order[np.ceil(data_shape[0]*sum(split_frac[0:2])).astype('int32'):], :, :]
-train_label = targets[rand_order[0:np.floor(data_shape[0]*split_frac[0]).astype('int32')], :]
-val_label = targets[rand_order[np.ceil(data_shape[0]*split_frac[0]).astype('int32'):np.floor(data_shape[0]*sum(split_frac[0:2])).astype('int32')], :]
-test_label = targets[rand_order[np.ceil(data_shape[0]*sum(split_frac[0:2])).astype('int32'):], :]
+inputs = norm(inputs.permute(2,0,1)).permute(1,2,0)
+
+data_shape = inputs.shape# inputs.size()
+rand_seed = 1729
+train, val, test = get_split_ind(rand_seed, data_shape, split_frac)
+train_data = inputs[train, :, :]
+val_data = inputs[val, :, :]
+test_data = inputs[test, :, :]
+train_label = targets[train, :]
+val_label = targets[val, :]
+test_label = targets[test, :]
 # variable->np error as variable stores history of the object and np has no provision
 # variable.data-> tensor->.numpy() gives array this can only be done on CPU so use .cpu()
 train_data_shape = train_data.size()
@@ -202,6 +225,7 @@ train_data_shape = train_data.size()
 
 model = lstm_att(input_size = inputs.size()[-1],num_layers = NUM_LAYERS, hidden_size = HIDDEN_SIZE,
                  factor = fac, drop_rate = 0.1, dense_out = 32, align_hidd=50,class_num=class_num)
+model.weight_init(flag=0)
 # print model
 # v, i = torch.max(train_label, dim=1)
 # print np.unique(v.data.cpu().numpy())
@@ -223,33 +247,25 @@ lr_scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer,mode = 'min', fact
 
 
 
+model.cuda()
 
-if cuda:
-    model = model.cuda()
-    train_data = train_data.cuda()
-    test_data = test_data.cuda()
-    val_data = val_data.cuda()
-    val_label = val_label.cuda()
-    train_label = train_label.cuda()
-    test_label = test_label.cuda()
-
+# def hook(module, gradIn, gradOut):
+#     print 'input-{0}'.format(gradIn)
+#
+#
+#
+# model.register_backward_hook(hook)
 
 
+# if cuda:
+#     model = model.cuda()
+#     train_data = train_data.cuda()
+#     test_data = test_data.cuda()
+#     val_data = val_data.cuda()
+#     val_label = val_label.cuda()
+#     train_label = train_label.cuda()
+#     test_label = test_label.cuda()
 
-
-
-
-for name, param in model.named_parameters():
-    if 'lstm' and 'weight' in name:
-        nn.init.kaiming_normal(param)
-        # print name+' initialized with norm. dist.'
-    elif 'dense' and 'weight' in name:
-        nn.init.kaiming_normal(param)
-        # print name + ' initialized with xavier norm. dist.'
-    elif 'dense' and 'bias' in name:
-        nn.init.constant(param, 0)
-        # print name + ' initialized with const. zero.'
-    # print name
 
 
 
@@ -260,9 +276,8 @@ for name, param in model.named_parameters():
 
 for epoch in range(NEPOCHS):
     losses = []
-    # print 'epoch-{0}/{1}'.format(epoch, NEPOCHS)
     for bid, bind in enumerate(batch(train_data_shape[0], BATCH_SIZE)):
-        binputs, btargets = train_data[bind,:,:], train_label[bind,:]
+        binputs, btargets = Variable(train_data[bind,:,:], requires_grad=True), train_label[bind,:]
         pred = model(binputs, istraining = True)
         model.zero_grad()
         loss = loss_function(pred, torch.squeeze(btargets))
@@ -270,17 +285,16 @@ for epoch in range(NEPOCHS):
         loss.backward()
         optimizer.step()
         # TODO look for gradients
-        print 'gradient-{0}'.format(inputs.grad)
-        # if bid%10 == 0:
-        #     print 'batch-{:d} loss-{:4f}'.format(bid, sum(losses)/len(losses))
-    # print 'epoch-{0}/{1} train loss-{:.4f}'.format(epoch, NEPOCHS,sum(losses)/len(losses))
-    # if epoch%10 == 0:
+        # grad = [[name, param.grad] for name, param in list(model.named_parameters())]
+        # print grad
+
+    val_data = Variable(val_data)
     val_pred = model(val_data, istraining = False)
     val_loss = loss_function(val_pred, torch.squeeze(val_label))
     values, val_cls_indices = torch.max(val_pred, dim = 1)
     print 'epoch-{:2d}/{:d} train_loss-{:.4f} val_loss-{:.4f} weighted val accuracy-{:.4f}'.format(epoch, NEPOCHS, sum(losses)/len(losses), val_loss.data
-                                                                                                   , metrics.accuracy_score(np.squeeze(val_label.data.cpu().numpy()), np.squeeze(val_cls_indices.data.cpu().numpy()),
-                                                         sample_weight=np.squeeze(cls_wt[rand_order[np.ceil(data_shape[0]*split_frac[0]).astype('int32'):np.floor(data_shape[0]*sum(split_frac[0:2])).astype('int32')],:])))
+                                                                                                   , metrics.accuracy_score(np.squeeze(val_label.data.cpu().numpy()), np.squeeze(val_cls_indices.data.cpu().numpy())))
+                                                         # , sample_weight=np.squeeze(cls_wt[val, :])))
     # print metrics.classification_report(val_label.data.cpu().numpy(), val_cls_indices.data.cpu().numpy(), digits=3)
     lr_scheduler.step(val_loss)
     writer.add_scalar('data/scalar1', sum(losses)/len(losses), epoch)
@@ -308,10 +322,10 @@ values, test_cls_indices = torch.max(test_pred, dim=1)
 print 'test loss-{:.4f}\n'.format(test_loss)
 print metrics.classification_report(test_label.data.cpu().numpy(), test_cls_indices.data.cpu().numpy(),
                                     digits=3)
-print 'weighted test accuracy-{0}'.format(metrics.accuracy_score(np.squeeze(test_label.data.cpu().numpy()), np.squeeze(test_cls_indices.data.cpu().numpy()),
-                                                                 sample_weight=np.squeeze(cls_wt[rand_order[np.ceil(data_shape[0]*sum(split_frac[0:2])).astype('int32'):],:])))
+print 'weighted test accuracy-{0}'.format(metrics.accuracy_score(np.squeeze(test_label.data.cpu().numpy()), np.squeeze(test_cls_indices.data.cpu().numpy())))
+                                                                 # , sample_weight=np.squeeze(cls_wt[test, :])))
 
 print metrics.confusion_matrix(test_label.data.cpu().numpy(), test_cls_indices.data.cpu().numpy())
 
-writer.export_scalars_to_json("./all_scalars.json")
+# writer.export_scalars_to_json("./all_scalars.json")
 writer.close()

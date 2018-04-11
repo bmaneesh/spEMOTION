@@ -3,11 +3,7 @@ import sys
 import numpy as np
 import random
 import scipy.io.wavfile
-
-# fpath = '/home/maneesh/Downloads/IEMOCAP_full_release/Session'
-#ex-/home/maneesh/Downloads/IEMOCAP_full_release/Session3/sentences/wav/
-#ex-/home/maneesh/Downloads/IEMOCAP_full_release/Session3/dialog/transcriptions
-#ex-/home/maneesh/Downloads/IEMOCAP_full_release/Session3/dialog/wav
+from scipy import signal
 
 def extract_data(fpath):
     emotion_label = {}
@@ -104,10 +100,15 @@ def extract_data(fpath):
     return 0
 
 def batch(data_len, bsize):
+    '''
+    :param data_len: number of samples in data
+    :param bsize: expected batch size
+    :return: indices of the batch
+    '''
     indices = range(data_len)
-    random.shuffle(indices)
+    # random.shuffle(indices)
     sindex = 0
-    eindex = bsize-1
+    eindex = bsize
     while eindex < len(indices):
         batch = indices[sindex:eindex]
         sindex = eindex
@@ -117,6 +118,45 @@ def batch(data_len, bsize):
     if eindex > data_len:
         batch = indices[sindex:]
         yield batch
+
+def spectrogram(data, fs, win='hann', nlap = 128, fft_len=256, axis=1):
+
+    '''
+
+    :param data: time domain signal
+    :param fs: sampling rate in time
+    :param win: window type
+    :param nlap: overlap length among the windows
+    :param fft_len: fft sequence lenfth
+    :param axis: axis of time
+    :return: FFT coefficients(dtype-complex)
+    '''
+    _, _, spect_feat = signal.stft(data = data, fs=fs, window=win, noverlap=nlap, nperseg=fft_len, axis=axis)
+    spect_feat = np.transpose(np.squeeze(spect_feat), (0,2,1))
+    np.savez('spect_feat_MEAN',data = spect_feat, )
+    return spect_feat
+
+
+def get_split_ind(seed, data_shape, split_frac):
+    '''
+
+    :param seed:random seed value
+    :param data_shape: input data shape
+    :param split_frac: train-val-test proportion
+    :return: indices for train, val and test respectively
+
+    '''
+
+    rand_order = range(0, data_shape[0])
+    random.Random(seed).shuffle(rand_order)
+
+    train_ind = rand_order[0:np.floor(data_shape[0] * split_frac[0]).astype('int32')]
+    val_ind = rand_order[np.ceil(data_shape[0] * split_frac[0]).astype('int32'):np.floor(data_shape[0] * sum(split_frac[0:2])).astype(
+        'int32')]
+    test_ind = rand_order[np.ceil(data_shape[0]*sum(split_frac[0:2])).astype('int32'):]
+
+    return train_ind, val_ind, test_ind
+
 
 # for sess in range(1,6):
     # for transcript in enumerate(os.listdir(os.path.join(fpath+str(sess), 'dialog/transcriptions/'))):
